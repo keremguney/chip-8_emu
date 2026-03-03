@@ -1,6 +1,8 @@
 use rand::{Rng, SeedableRng};
 use std::fs;
 
+type Chip8Func = fn(&mut Chip8);
+
 const START_ADDR: usize = 0x200;
 const MEM_SIZE: usize = 4096;
 const FONTSET_SIZE: usize = 80;
@@ -27,45 +29,6 @@ const FONTSET: [u8; FONTSET_SIZE] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-#[derive(Debug)]
-pub enum Instruction {
-    ClearScreen,
-    Return,
-    Jump(u16),
-    Call(u16),
-    SkipEq(usize, u8),
-    SkipNotEq(usize, u8),
-    SkipEqReg(usize, usize),
-    Set(usize, u8),
-    Add(usize, u8),
-    SetReg(usize, usize),
-    Or(usize, usize),
-    And(usize, usize),
-    Xor(usize, usize),
-    AddReg(usize, usize),
-    SubReg(usize, usize),
-    ShiftRight(usize),
-    SubnReg(usize, usize),
-    ShiftLeft(usize),
-    SkipNotEqReg(usize, usize),
-    SetIndex(u16),
-    JumpOffset(u16),
-    Random(usize, u8),
-    Draw(usize, usize, usize),
-    SkipKey(usize),
-    SkipNotKey(usize),
-    GetTimer(usize),
-    WaitKey(usize),
-    SetDelayTimer(usize),
-    SetSoundTimer(usize),
-    AddIndex(usize),
-    SetFont(usize),
-    Bcd(usize),
-    StoreRegs(usize),
-    LoadRegs(usize),
-    Unknown(u16),
-}
-
 pub struct Chip8 {
     registers: [u8; 16],
     memory: [u8; MEM_SIZE],
@@ -79,6 +42,11 @@ pub struct Chip8 {
     video: [u32; VIDEO_HEIGHT * VIDEO_WIDTH],
     opcode: u16,
     rng: rand::rngs::StdRng,
+    table: [Chip8Func; 0xF + 1],
+    table0: [Chip8Func; 0xE + 1],
+    table8: [Chip8Func; 0xE + 1],
+    table_e: [Chip8Func; 0xE + 1],
+    table_f: [Chip8Func; 0x65 + 1],
 }
 
 impl Chip8 {
@@ -96,7 +64,56 @@ impl Chip8 {
             video: [0; VIDEO_HEIGHT * VIDEO_WIDTH],
             opcode: 0,
             rng: rand::rngs::StdRng::from_entropy(),
+            table: [Self::op_null; 0x10],
+            table0: [Self::op_null; 0xF],
+            table8: [Self::op_null; 0xF],
+            table_e: [Self::op_null; 0xF],
+            table_f: [Self::op_null; 0x66],
         };
+
+        chip.table[0x0] = Self::table_0;
+        chip.table[0x1] = Self::op_1nnn;
+        chip.table[0x2] = Self::op_2nnn;
+        chip.table[0x3] = Self::op_3xkk;
+        chip.table[0x4] = Self::op_4xkk;
+        chip.table[0x5] = Self::op_5xy0;
+        chip.table[0x6] = Self::op_6xkk;
+        chip.table[0x7] = Self::op_7xkk;
+        chip.table[0x8] = Self::table_8;
+        chip.table[0x9] = Self::op_9xy0;
+        chip.table[0xA] = Self::op_annn;
+        chip.table[0xB] = Self::op_bnnn;
+        chip.table[0xC] = Self::op_cxkk;
+        chip.table[0xD] = Self::op_dxyn;
+        chip.table[0xE] = Self::table_e;
+        chip.table[0xF] = Self::table_f;
+
+        chip.table0[0x0] = Self::op_00e0;
+        chip.table0[0xE] = Self::op_00ee;
+
+        chip.table8[0x0] = Self::op_8xy0;
+        chip.table8[0x1] = Self::op_8xy1;
+        chip.table8[0x2] = Self::op_8xy2;
+        chip.table8[0x3] = Self::op_8xy3;
+        chip.table8[0x4] = Self::op_8xy4;
+        chip.table8[0x5] = Self::op_8xy5;
+        chip.table8[0x6] = Self::op_8xy6;
+        chip.table8[0x7] = Self::op_8xy7;
+        chip.table8[0xE] = Self::op_8xye;
+
+        chip.table_e[0x1] = Self::op_exa1;
+        chip.table_e[0xE] = Self::op_ex9e;
+
+        chip.table_f[0x07] = Self::op_fx07;
+        chip.table_f[0x0A] = Self::op_fx0a;
+        chip.table_f[0x15] = Self::op_fx15;
+        chip.table_f[0x18] = Self::op_fx18;
+        chip.table_f[0x1E] = Self::op_fx1e;
+        chip.table_f[0x29] = Self::op_fx29;
+        chip.table_f[0x33] = Self::op_fx33;
+        chip.table_f[0x55] = Self::op_fx55;
+        chip.table_f[0x65] = Self::op_fx65;
+
         for i in 0..FONTSET_SIZE {
             chip.memory[FONTSET_START_ADDR + i] = FONTSET[i];
         }
@@ -118,81 +135,47 @@ impl Chip8 {
         Ok(())
     }
 
-    fn fetch(&mut self) -> u16 {
-        let opcode = (self.memory[self.pc as usize] as u16) << 8
-            | (self.memory[(self.pc + 1) as usize] as u16);
+    pub fn cycle(&mut self) {
+        let pc = self.pc as usize;
+
+        self.opcode = ((self.memory[pc] as u16) << 8) | (self.memory[pc + 1] as u16);
         self.pc += 2;
-        opcode
-    }
 
-    fn decode(opcode: u16) -> Instruction {
-        let n1 = (opcode & 0xF000) >> 12;
-        let x = ((opcode & 0x0F00) >> 8) as usize;
-        let y = ((opcode & 0x00F0) >> 4) as usize;
-        let n = (opcode & 0x000F) as usize;
-        let nn = (opcode & 0x00FF) as u8;
-        let nnn = opcode & 0x0FFF;
+        let table_index = ((self.opcode & 0xF000) >> 12) as usize;
+        (self.table[table_index])(self);
 
-        match (n1, x, y, n) {
-            (0x0, 0x0, 0xE, 0x0) => Instruction::ClearScreen,
-            (0x0, 0x0, 0xE, 0xE) => Instruction::Return,
-            (0x1, _, _, _) => Instruction::Jump(nnn),
-            (0x2, _, _, _) => Instruction::Call(nnn),
-            (0x3, _, _, _) => Instruction::SkipEq(x, nn),
-            (0x4, _, _, _) => Instruction::SkipNotEq(x, nn),
-            (0x5, _, _, 0x0) => Instruction::SkipEqReg(x, y),
-            (0x6, _, _, _) => Instruction::Set(x, nn),
-            (0x7, _, _, _) => Instruction::Add(x, nn),
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        }
 
-            (0x8, _, _, 0x0) => Instruction::SetReg(x, y),
-            (0x8, _, _, 0x1) => Instruction::Or(x, y),
-            (0x8, _, _, 0x2) => Instruction::And(x, y),
-            (0x8, _, _, 0x3) => Instruction::Xor(x, y),
-            (0x8, _, _, 0x4) => Instruction::AddReg(x, y),
-            (0x8, _, _, 0x5) => Instruction::SubReg(x, y),
-            (0x8, _, _, 0x6) => Instruction::ShiftRight(x),
-            (0x8, _, _, 0x7) => Instruction::SubnReg(x, y),
-            (0x8, _, _, 0xE) => Instruction::ShiftLeft(x),
-
-            (0x9, _, _, 0x0) => Instruction::SkipNotEqReg(x, y),
-            (0xA, _, _, _) => Instruction::SetIndex(nnn),
-            (0xB, _, _, _) => Instruction::JumpOffset(nnn),
-            (0xC, _, _, _) => Instruction::Random(x, nn),
-            (0xD, _, _, _) => Instruction::Draw(x, y, n),
-
-            (0xE, _, 0x9, 0xE) => Instruction::SkipKey(x),
-            (0xE, _, 0xA, 0x1) => Instruction::SkipNotKey(x),
-
-            (0xF, _, 0x0, 0x7) => Instruction::GetTimer(x),
-            (0xF, _, 0x0, 0xA) => Instruction::WaitKey(x),
-            (0xF, _, 0x1, 0x5) => Instruction::SetDelayTimer(x),
-            (0xF, _, 0x1, 0x8) => Instruction::SetSoundTimer(x),
-            (0xF, _, 0x1, 0xE) => Instruction::AddIndex(x),
-            (0xF, _, 0x2, 0x9) => Instruction::SetFont(x),
-            (0xF, _, 0x3, 0x3) => Instruction::Bcd(x),
-            (0xF, _, 0x5, 0x5) => Instruction::StoreRegs(x),
-            (0xF, _, 0x6, 0x5) => Instruction::LoadRegs(x),
-
-            _ => Instruction::Unknown(opcode),
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
         }
     }
 
-    fn execute(&mut self, instruction: Instruction) {
-        match instruction {
-            Instruction::ClearScreen => self.op_00e0(),
-            Instruction::Return => self.op_00ee(),
-            Instruction::Unknown(opcode) => eprintln!("Unknown opcode: {:#06X}", opcode),
-            _ => {}
-        }
+    fn table_0(&mut self) {
+        let index = (self.opcode & 0x000F) as usize;
+        (self.table0[index])(self);
     }
 
-    pub fn tick(&mut self) {
-        let opcode = self.fetch();
-        let instruction = Self::decode(opcode);
-        self.execute(instruction);
+    fn table_8(&mut self) {
+        let index = (self.opcode & 0x000F) as usize;
+        (self.table8[index])(self);
+    }
+
+    fn table_e(&mut self) {
+        let index = (self.opcode & 0x000F) as usize;
+        (self.table_e[index])(self);
+    }
+
+    fn table_f(&mut self) {
+        let index = (self.opcode & 0x00FF) as usize;
+        (self.table_f[index])(self);
     }
 
     // OPCODES
+    fn op_null(&mut self) {}
+
     fn op_00e0(&mut self) {
         self.video.fill(0);
     }
