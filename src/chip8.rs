@@ -143,12 +143,17 @@ impl Chip8 {
 
         let table_index = ((self.opcode & 0xF000) >> 12) as usize;
         (self.table[table_index])(self);
+    }
 
+    pub fn tick_timers(&mut self) {
         if self.delay_timer > 0 {
             self.delay_timer -= 1;
         }
 
         if self.sound_timer > 0 {
+            if self.sound_timer == 1 {
+                // Add BEEEEEPPPPPP here
+            }
             self.sound_timer -= 1;
         }
     }
@@ -173,6 +178,16 @@ impl Chip8 {
         (self.table_f[index])(self);
     }
 
+    pub fn set_keys(&mut self, keys: &[u8; 16]) {
+        self.keypad.copy_from_slice(keys);
+    }
+
+    pub fn video_buffer_u8(&self) -> &[u8] {
+        let ptr = self.video.as_ptr() as *const u8;
+        let len = self.video.len() * 4;
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
+
     // OPCODES
     fn op_null(&mut self) {}
 
@@ -181,8 +196,12 @@ impl Chip8 {
     }
 
     fn op_00ee(&mut self) {
-        self.sp -= 1;
-        self.pc = self.stack[self.sp as usize];
+        if self.sp > 0 {
+            self.sp -= 1;
+            self.pc = self.stack[self.sp as usize];
+        } else {
+            println!("Warning: Stack underflow intercepted at PC: {:#X}", self.pc);
+        }
     }
 
     fn op_1nnn(&mut self) {
@@ -192,12 +211,18 @@ impl Chip8 {
 
     fn op_2nnn(&mut self) {
         let addr: u16 = self.opcode & 0xFFF;
+        self.stack[self.sp as usize] = self.pc;
+        self.sp += 1;
         self.pc = addr;
     }
 
     fn op_3xkk(&mut self) {
         let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
         let byte: u8 = (self.opcode & 0x00FF) as u8;
+
+        if self.registers[vx as usize] == byte {
+            self.pc += 2;
+        }
     }
 
     fn op_4xkk(&mut self) {
@@ -229,7 +254,7 @@ impl Chip8 {
         let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
         let byte: u8 = (self.opcode & 0x00FF) as u8;
 
-        self.registers[vx as usize] += byte;
+        self.registers[vx as usize] = self.registers[vx as usize].wrapping_add(byte);
     }
 
     fn op_8xy0(&mut self) {
@@ -264,15 +289,11 @@ impl Chip8 {
         let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
         let vy: u8 = ((self.opcode & 0x00F0) >> 4) as u8;
 
-        let sum: u16 = self.registers[vx as usize] as u16 + self.registers[vy as usize] as u16;
+        let (sum, overflow) =
+            self.registers[vx as usize].overflowing_add(self.registers[vy as usize]);
 
-        if sum > 255 {
-            self.registers[0xF] = 1;
-        } else {
-            self.registers[0xF] = 0;
-        }
-
-        self.registers[vx as usize] = (sum & 0xFF) as u8;
+        self.registers[0xF] = if overflow { 1 } else { 0 };
+        self.registers[vx as usize] = sum;
     }
 
     fn op_8xy5(&mut self) {
@@ -354,7 +375,7 @@ impl Chip8 {
         self.registers[0xF] = 0;
 
         for row in 0..height {
-            let sprite_byte: u8 = self.memory[(self.index as u8 + row) as usize];
+            let sprite_byte: u8 = self.memory[(self.index + row as u16) as usize];
 
             for col in 0..8 {
                 let sprite_pixel = sprite_byte & (0x80 >> col);
@@ -367,13 +388,13 @@ impl Chip8 {
                         continue;
                     }
 
-                    let pixel_index = screen_y * VIDEO_WIDTH as u8 + screen_x;
+                    let pixel_index = (screen_y as usize) * VIDEO_WIDTH + (screen_x as usize);
 
-                    if self.video[pixel_index as usize] == 0xFFFFFFFF {
+                    if self.video[pixel_index] == 0xFFFFFFFF {
                         self.registers[0xF] = 1;
                     }
 
-                    self.video[pixel_index as usize] ^= 0xFFFFFFFF;
+                    self.video[pixel_index] ^= 0xFFFFFFFF;
                 }
             }
         }
@@ -461,7 +482,7 @@ impl Chip8 {
         let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
 
         for i in 0..=vx {
-            self.registers[i as usize] = self.memory[(self.index + 1) as usize];
+            self.registers[i as usize] = self.memory[(self.index + i as u16) as usize];
         }
     }
 }

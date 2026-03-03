@@ -1,0 +1,24 @@
+   Compiling chip-8-emu v0.1.0 (/home/kerem/Projects/chip-8-emu)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running `target/debug/chip-8-emu`
+
+thread 'main' (796607) panicked at src/chip8.rs:194:9:
+attempt to subtract with overflow
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/std/src/panicking.rs:689:5
+   1: core::panicking::panic_fmt
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/core/src/panicking.rs:80:14
+   2: core::panicking::panic_const::panic_const_sub_overflow
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/core/src/panicking.rs:175:17
+   3: chip_8_emu::chip8::Chip8::op_00ee
+             at ./src/chip8.rs:194:9
+   4: chip_8_emu::chip8::Chip8::table_0
+             at ./src/chip8.rs:158:9
+   5: chip_8_emu::chip8::Chip8::cycle
+             at ./src/chip8.rs:145:9
+   6: chip_8_emu::main
+             at ./src/main.rs:29:15
+   7: core::ops::function::FnOnce::call_once
+             at /home/kerem/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
