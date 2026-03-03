@@ -282,6 +282,92 @@ impl Chip8 {
             }
         }
     }
+
+    fn op_ex9e(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+        let key: u8 = self.registers[vx as usize];
+
+        if self.keypad[key as usize] != 0 {
+            self.pc += 2;
+        }
+    }
+
+    fn op_exa1(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+
+        let key: u8 = self.registers[vx as usize];
+
+        if self.keypad[key as usize] == 0 {
+            self.pc += 2;
+        }
+    }
+
+    fn op_fx07(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+
+        self.registers[vx as usize] = self.delay_timer;
+    }
+
+    fn op_fx0a(&mut self) {
+        let vx = ((self.opcode & 0x0F00) >> 8) as u8;
+
+        if let Some(key) = self.keypad.iter().position(|&k| k != 0) {
+            self.registers[vx as usize] = key as u8;
+        } else {
+            self.pc -= 2;
+        }
+    }
+
+    fn op_fx15(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+        self.delay_timer = self.registers[vx as usize];
+    }
+
+    fn op_fx18(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+        self.sound_timer = self.registers[vx as usize];
+    }
+
+    fn op_fx1e(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+        self.index += self.registers[vx as usize] as u16;
+    }
+
+    fn op_fx29(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+        let digit: u8 = self.registers[vx as usize];
+
+        self.index = (FONTSET_START_ADDR as u8 + (5 * digit)) as u16;
+    }
+
+    fn op_fx33(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+        let mut value: u8 = self.registers[vx as usize];
+
+        self.memory[(self.index + 2) as usize] = value % 10;
+        value /= 10;
+
+        self.memory[(self.index + 1) as usize] = value % 10;
+        value /= 10;
+
+        self.memory[self.index as usize] = value % 10;
+    }
+
+    fn op_fx55(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+
+        for i in 0..=vx {
+            self.memory[(self.index + i as u16) as usize] = self.registers[i as usize];
+        }
+    }
+
+    fn op_fx65(&mut self) {
+        let vx: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+
+        for i in 0..=vx {
+            self.registers[i as usize] = self.memory[(self.index + 1) as usize];
+        }
+    }
 }
 
 fn main() {
